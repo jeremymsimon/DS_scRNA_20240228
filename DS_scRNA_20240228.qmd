@@ -1,0 +1,301 @@
+---
+title: "DFCI Department of Data Science: Introduction to scRNA-seq and data preprocessing"
+subtitle: "Rendered 2/26/2024"
+author: "Jeremy M. Simon"
+format:
+  html:
+    embed-resources: true
+    toc: true
+editor: visual
+---
+# Software requirements
+## pyroe
+* <https://pyroe.readthedocs.io/en/latest/index.html>
+* <https://github.com/COMBINE-lab/pyroe>
+* `pip install pyroe --user` will work for most
+
+## salmon
+* <https://salmon.readthedocs.io/en/latest/building.html#installation>
+* <https://github.com/COMBINE-lab/salmon>
+* DS/Kraken: module load salmon/1.10.0 
+
+## alevin-fry
+* <https://alevin-fry.readthedocs.io/en/latest/index.html>
+* <https://github.com/COMBINE-lab/alevin-fry>
+* DS/Kraken: module load alevin-fry
+
+## R packages: `fishpond`, `SingleCellExperiment`, `Seurat`, `Matrix`, `tidyverse`, `alevinQC`
+```{r}
+#| eval: false
+BiocManager::install("fishpond")
+BiocManager::install("SingleCellExperiment")
+install.packages("Seurat")
+install.packages("Matrix")
+install.packages("tidyverse")
+BiocManager::install("alevinQC")
+```
+
+# Set up unix/linux workspace
+## Make working directory
+```{bash}
+#| eval: false
+mkdir DS_scRNA_20240228
+```
+
+```{bash}
+#| eval: true
+#| echo: false
+cd /jsimonlab/workshops/DS_scRNA_20240228
+```
+
+## Retrieve example dataset
+10X 1k PBMC from a healthy donor, 5' V3 chemistry, [available here](https://www.10xgenomics.com/datasets/1-k-pbm-cs-from-a-healthy-donor-v-3-chemistry-3-standard-3-0-0)
+```{bash}
+#| eval: false
+# Download 10x FASTQ files
+# Note if "wget" doesn't work, try "curl -O" in its place instead
+wget https://cf.10xgenomics.com/samples/cell-exp/3.0.0/pbmc_1k_v3/pbmc_1k_v3_fastqs.tar
+
+# Un-tar FASTQ files
+tar -xvf pbmc_1k_v3_fastqs.tar
+```
+
+### Peek at one of the R1 files
+
+```{bash}
+zcat pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L001_R1_001.fastq.gz | head -n 24
+```
+
+### Peek at one of the R2 files
+
+```{bash}
+zcat pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L001_R2_001.fastq.gz | head -n 24
+```
+
+## Retrieve reference genome and gene annotations
+
+Links are sourced from [GENCODE website](https://www.gencodegenes.org/human/)
+
+```{bash}
+#| eval: false
+# Download GENCODE GTF of gene annotations
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/gencode.v45.annotation.gtf.gz
+
+# Download reference genome sequence
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/GRCh38.primary_assembly.genome.fa.gz
+
+# Unzip both files
+gunzip GRCh38.primary_assembly.genome.fa.gz
+gunzip gencode.v45.annotation.gtf.gz
+```
+
+# Prepare reference annotation index
+## Generate splici annotation
+If time or computing environment dictates, this and the next step can be temporarily skipped.
+Instead, users can download my pre-made index [from Dropbox](https://www.dropbox.com/scl/fi/k0sxdvguvqmoz8i1x5aci/gencode.v43.annotation_splici_fl85_idx.tar.gz?rlkey=o8a7c1c7vorh6gbnx7kz1xskt&dl=0)
+```{bash}
+#| eval: false
+# Install pyroe
+pip install pyroe --user
+
+# Run pyroe on Kraken via sbatch
+sbatch --mem 20g --wrap="pyroe make-spliced+intronic \
+	GRCh38.primary_assembly.genome.fa \
+	gencode.v45.annotation.gtf \
+	90 \
+	gencode.v45.annotation_splici_fl85"
+
+# Check status of running job with, for example
+squeue -u jsimon
+```
+
+## Create salmon index of splici annotation
+
+```{bash}
+#| eval: false
+module load salmon/1.10.0
+sbatch --mem 20g -n 8 --wrap="salmon index \
+	-t gencode.v45.annotation_splici_fl85/splici_fl85.fa \
+	--gencode \
+	-i gencode.v45.annotation_splici_fl85_idx \
+	-p 8"
+
+```
+
+# Count transcripts per cells with `alevin` and `alevin-fry`
+## Run `alevin`
+```{bash}
+#| eval: false
+sbatch --mem 20g -n 4 --wrap="salmon alevin \
+  -l ISR \
+  --dumpFeatures \
+  -i gencode.v45.annotation_splici_fl85_idx \
+  -1 pbmc_1k_v3_fastqs/*R1*.fastq.gz \
+  -2 pbmc_1k_v3_fastqs/*R2*.fastq.gz \
+  --chromiumV3 \
+  -o 1k_PBMC_alevin_out \
+  -p 4 \
+  --sketch \
+  --rad"
+
+```
+
+## Run `alevin-fry generate-permit-list`
+
+```{bash}
+#| eval: false
+module load alevin-fry
+sbatch --mem 20g --wrap="alevin-fry generate-permit-list \
+  -d fw \
+  -k \
+  -i 1k_PBMC_alevin_out \
+  -o 1k_PBMC_alevin_quant"
+```
+
+## Run `alevin-fry collate`
+
+```{bash}
+#| eval: false
+sbatch --mem 20g -n 16 --wrap="alevin-fry collate \
+  -r 1k_PBMC_alevin_out \
+  -i 1k_PBMC_alevin_quant \
+  -t 16"
+```
+
+### Peek at our RAD file with `alevin-fry view`
+```{bash}
+#| eval: false
+alevin-fry view -r 1k_PBMC_alevin_out/map.rad | head
+```
+
+```{bash}
+#| echo: false
+~/.cargo/bin/alevin-fry view -r 1k_PBMC_alevin_out/map.rad | head
+```
+
+## Run `alevin-fry quant`
+
+```{bash}
+#| eval: false
+sbatch --mem 20g -n 16 --wrap="alevin-fry quant \
+  -m gencode.v45.annotation_splici_fl85/splici_fl85_t2g_3col.tsv \
+  -i 1k_PBMC_alevin_quant \
+  -o 1k_PBMC_alevin_quant_crlikeem \
+  -r cr-like-em \
+  -t 16 \
+  --use-mtx"
+```
+
+### Count how many cells we detected
+
+```{bash}
+wc -l 1k_PBMC_alevin_quant_crlikeem/alevin/quants_mat_rows.txt 
+```
+
+# Run `alevinQC`, then import `alevin-fry` counts into R with `fishpond::loadFry()`
+
+```{r}
+#| warning: false
+#| error: false
+library(fishpond)
+library(SingleCellExperiment)
+library(Seurat)
+library(Matrix)
+library(tidyverse)
+library(alevinQC)
+
+# Generate QC report in a separate html file
+alevinFryQCReport("1k_PBMC_alevin_out",
+        "1k_PBMC_alevin_quant",
+        "1k_PBMC_alevin_quant_crlikeem",
+        outputFormat = "html_document",
+        showCode=T,
+        outputDir = "1k_PBMC_alevin_quant_crlikeem",
+        outputFile = "1k_PBMC_alevin_quant_QC.html",
+        sampleId = "1k_PBMC"
+)
+
+Sample1_RNA <- loadFry("1k_PBMC_alevin_quant_crlikeem", 
+	outputFormat = "snRNA")
+	
+# Peek at counts
+counts(Sample1_RNA)[1:5,1:5]
+dim(counts(Sample1_RNA))
+```
+
+# Collapse gene IDs to gene symbols
+Note there are some duplicated gene symbols, mainly due to the chrY PAR
+```{r}
+tx2gene <- read.table("gencode.v45.annotation_splici_fl85/gene_id_to_name.tsv",
+                      header=F,
+                      sep="\t",
+                      col.names=c("tx","gene"))
+
+# Use matrix multiplication to group and sum counts by gene symbol
+exp.txId <- rownames(counts(Sample1_RNA))
+exp.geneId <- as.vector(tx2gene$gene[match(exp.txId, tx2gene$tx)])
+exp.tx.grp <- t(sparse.model.matrix(~ 0 + exp.geneId))
+
+Sample1_RNA.summarized <- exp.tx.grp %*% counts(Sample1_RNA)
+rownames(Sample1_RNA.summarized) <- rownames(Sample1_RNA.summarized) %>% str_replace_all(".+.geneId","")
+
+# Peek at counts again
+Sample1_RNA.summarized[1:5,1:5]
+dim(Sample1_RNA.summarized)
+```
+
+# Follow basic Seurat workflow
+
+```{r}
+#| warning: false
+pbmc.seurat <- CreateSeuratObject(Sample1_RNA.summarized)
+
+# Compute mitochondrial contribution per cell and filter out poor quality cells
+# Note: My preferred approach here is to use [`MiQC`](https://bioconductor.org/packages/release/bioc/html/miQC.html) rather than set a hard `percent.mt` cutoff
+pbmc.seurat <- PercentageFeatureSet(pbmc.seurat, 
+                                    pattern = "^MT-", # Uses all gene names that begin with "MT-"
+                                    col.name = "percent.mt")		
+pbmc.seurat <- subset(pbmc.seurat, subset = nCount_RNA > 1000 & nCount_RNA < 25000 & nFeature_RNA > 500 & percent.mt < 10)
+
+# Normalize and scale data
+pbmc.seurat <- NormalizeData(pbmc.seurat)
+pbmc.seurat <- FindVariableFeatures(pbmc.seurat, 
+                                    selection.method = "vst", 
+                                    nfeatures = 3000)
+pbmc.seurat <- ScaleData(pbmc.seurat)
+
+# Run PCA and select "significant" PCs
+pbmc.seurat <- RunPCA(pbmc.seurat, npcs = 100)
+ElbowPlot(pbmc.seurat, ndims = 100)
+
+# Identify clusters
+pbmc.seurat <- FindNeighbors(pbmc.seurat, dims = 1:10, reduction = "pca")
+pbmc.seurat <- FindClusters(pbmc.seurat, resolution = 0.6, algorithm = 2)
+
+# Visualize with UMAP
+pbmc.seurat <- RunUMAP(pbmc.seurat, dims = 1:10)
+DimPlot(pbmc.seurat, reduction = "umap", label=T)
+```
+
+# Visualize known key features
+```{r}
+#| fig-width: 12
+#| fig-height: 10
+FeaturePlot(pbmc.seurat, 
+	features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A"),
+	order = T
+	)
+
+VlnPlot(pbmc.seurat, 
+	features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A"),
+	sort = T,
+	flip = T,
+	stack = T
+) + NoLegend()
+```
+
+# Get R session info
+
+```{r}
+sessionInfo()
+```
