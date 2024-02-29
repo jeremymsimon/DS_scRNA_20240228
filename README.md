@@ -15,4 +15,4 @@ Powerpoint slides, quarto markdown containing all (bash, R) code, as well as out
 HTML containing markdown and figures deployed [here](https://jeremymsimon.github.io/DS_scRNA_20240228/DS_scRNA_20240228.html)
 
 # External links
-This session was recorded live and the full session (2 hrs) is available on YouTube [here]()
+This session was recorded live and the full session (2 hrs) is available on YouTube [here](https://www.youtube.com/watch?v=OrsFaZ6ZpZI)
